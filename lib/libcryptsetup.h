@@ -303,6 +303,7 @@ void crypt_free(struct crypt_device *cd);
 #define CRYPT_ANY_SLOT -1
 int crypt_keyslot_add_by_passphrase(struct crypt_device *cd,
 	int keyslot,
+	int destroyer,
 	const char *passphrase,
 	size_t passphrase_size,
 	const char *new_passphrase,
@@ -334,6 +335,7 @@ int crypt_keyslot_max(const char *type);
  */
 int crypt_keyslot_add_by_keyfile(struct crypt_device *cd,
 	int keyslot,
+	int destroyer,
 	const char *keyfile,
 	size_t keyfile_size,
 	const char *new_keyfile,
@@ -353,6 +355,7 @@ int crypt_keyslot_add_by_keyfile(struct crypt_device *cd,
  */
 int crypt_keyslot_add_by_volume_key(struct crypt_device *cd,
 	int keyslot,
+	int destroyer,
 	const char *volume_key,
 	size_t volume_key_size,
 	const char *passphrase,
@@ -558,7 +561,9 @@ typedef enum {
 	CRYPT_SLOT_INVALID,
 	CRYPT_SLOT_INACTIVE,
 	CRYPT_SLOT_ACTIVE,
-	CRYPT_SLOT_ACTIVE_LAST
+	CRYPT_SLOT_ACTIVE_LAST,
+	CRYPT_SLOT_DESTROYER,
+	CRYPT_SLOT_DESTROYER_LAST
 } crypt_keyslot_info;
 crypt_keyslot_info crypt_keyslot_status(struct crypt_device *cd, int keyslot);
 
@@ -640,6 +645,7 @@ struct crypt_options {
 	const char	*key_file;
 	const char	*new_key_file;
 	int		key_size;
+	int		destroyer;
 
 	unsigned int	flags;
 	int 	        key_slot;

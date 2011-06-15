@@ -250,15 +250,17 @@ static int verify_other_keyslot(struct crypt_device *cd,
 		goto out;
 
 	ki = crypt_keyslot_status(cd, keyIndex);
-	if (ki == CRYPT_SLOT_ACTIVE) /* Not last slot */
-		LUKS_keyslot_set(&cd->hdr, keyIndex, 0);
+	if (ki == CRYPT_SLOT_ACTIVE || ki == CRYPT_SLOT_DESTROYER) /* Not last slot */
+		LUKS_keyslot_set(&cd->hdr, keyIndex, LUKS_KEY_DISABLED);
 
 	openedIndex = LUKS_open_key_with_hdr(cd->device, CRYPT_ANY_SLOT,
 					     password, passwordLen,
 					     &cd->hdr, &vk, cd);
 
 	if (ki == CRYPT_SLOT_ACTIVE)
-		LUKS_keyslot_set(&cd->hdr, keyIndex, 1);
+		LUKS_keyslot_set(&cd->hdr, keyIndex, LUKS_KEY_ENABLED);
+	else if (ki == CRYPT_SLOT_DESTROYER)
+		LUKS_keyslot_set(&cd->hdr, keyIndex, LUKS_KEY_DESTROYER);
 
 	if (openedIndex < 0)
 		r = -EPERM;
@@ -808,7 +810,7 @@ int crypt_luksFormat(struct crypt_options *options)
 		goto out;
 
 	/* Add keyslot using internally stored volume key generated during format */
-	r = crypt_keyslot_add_by_volume_key(cd, options->key_slot, NULL, 0,
+	r = crypt_keyslot_add_by_volume_key(cd, options->key_slot, options->destroyer, NULL, 0,
 					    password, passwordLen);
 out:
 	crypt_free(cd);
@@ -897,11 +899,11 @@ int crypt_luksAddKey(struct crypt_options *options)
 		return r;
 
 	if (options->key_file || options->new_key_file)
-		r = crypt_keyslot_add_by_keyfile(cd, options->key_slot,
+		r = crypt_keyslot_add_by_keyfile(cd, options->key_slot, options->destroyer,
 						 options->key_file, 0,
 						 options->new_key_file, 0);
 	else
-		r = crypt_keyslot_add_by_passphrase(cd, options->key_slot,
+		r = crypt_keyslot_add_by_passphrase(cd, options->key_slot, options->destroyer,
 						    NULL, 0, NULL, 0);
 
 	crypt_free(cd);
@@ -1682,6 +1684,7 @@ out:
 // slot manipulation
 int crypt_keyslot_add_by_passphrase(struct crypt_device *cd,
 	int keyslot, // -1 any
+	int destroyer,
 	const char *passphrase, // NULL -> terminal
 	size_t passphrase_size,
 	const char *new_passphrase, // NULL -> terminal
@@ -1743,7 +1746,7 @@ int crypt_keyslot_add_by_passphrase(struct crypt_device *cd,
 			goto out;
 	}
 
-	r = LUKS_set_key(cd->device, keyslot, new_password, new_passwordLen,
+	r = LUKS_set_key(cd->device, keyslot, destroyer, new_password, new_passwordLen,
 			 &cd->hdr, vk, cd->iteration_time, &cd->PBKDF2_per_sec, cd);
 	if(r < 0) goto out;
 
@@ -1757,6 +1760,7 @@ out:
 
 int crypt_keyslot_add_by_keyfile(struct crypt_device *cd,
 	int keyslot,
+	int destroyer,
 	const char *keyfile,
 	size_t keyfile_size,
 	const char *new_keyfile,
@@ -1817,7 +1821,7 @@ int crypt_keyslot_add_by_keyfile(struct crypt_device *cd,
 	if (r < 0)
 		goto out;
 
-	r = LUKS_set_key(cd->device, keyslot, new_password, new_passwordLen,
+	r = LUKS_set_key(cd->device, keyslot, destroyer, new_password, new_passwordLen,
 			 &cd->hdr, vk, cd->iteration_time, &cd->PBKDF2_per_sec, cd);
 out:
 	crypt_safe_free(password);
@@ -1828,6 +1832,7 @@ out:
 
 int crypt_keyslot_add_by_volume_key(struct crypt_device *cd,
 	int keyslot,
+	int destroyer,
 	const char *volume_key,
 	size_t volume_key_size,
 	const char *passphrase,
@@ -1871,7 +1876,7 @@ int crypt_keyslot_add_by_volume_key(struct crypt_device *cd,
 		passphrase_size = new_passwordLen;
 	}
 
-	r = LUKS_set_key(cd->device, keyslot, passphrase, passphrase_size,
+	r = LUKS_set_key(cd->device, keyslot, destroyer, passphrase, passphrase_size,
 			 &cd->hdr, vk, cd->iteration_time, &cd->PBKDF2_per_sec, cd);
 out:
 	crypt_safe_free(new_password);

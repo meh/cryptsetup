@@ -55,6 +55,10 @@ static const char *dbg_slot_state(crypt_keyslot_info ki)
 		return "ACTIVE";
 	case CRYPT_SLOT_ACTIVE_LAST:
 		return "ACTIVE_LAST";
+	case CRYPT_SLOT_DESTROYER:
+		return "DESTROYER";
+	case CRYPT_SLOT_DESTROYER_LAST:
+		return "DESTROYER_LAST";
 	case CRYPT_SLOT_INVALID:
 	default:
 		return "INVALID";
@@ -518,7 +522,7 @@ int LUKS_hdr_uuid_set(
 	return LUKS_write_phdr(device, hdr, ctx);
 }
 
-int LUKS_set_key(const char *device, unsigned int keyIndex,
+int LUKS_set_key(const char *device, unsigned int keyIndex, int destroyer,
 		 const char *password, size_t passwordLen,
 		 struct luks_phdr *hdr, struct volume_key *vk,
 		 uint32_t iteration_time_ms,
@@ -607,8 +611,8 @@ int LUKS_set_key(const char *device, unsigned int keyIndex,
 		goto out;
 	}
 
-	/* Mark the key as active in phdr */
-	r = LUKS_keyslot_set(hdr, (int)keyIndex, 1);
+	/* Mark the key as active or destroyer in phdr */
+	r = LUKS_keyslot_set(hdr, (int)keyIndex, destroyer ? LUKS_KEY_DESTROYER : LUKS_KEY_ENABLED);
 	if (r < 0)
 		goto out;
 
@@ -814,7 +818,7 @@ int LUKS_del_key(const char *device,
 	if (r)
 		return r;
 
-	r = LUKS_keyslot_set(hdr, keyIndex, 0);
+	r = LUKS_keyslot_set(hdr, keyIndex, LUKS_KEY_DISABLED);
 	if (r) {
 		log_err(ctx, _("Key slot %d is invalid, please select keyslot between 0 and %d.\n"),
 			keyIndex, LUKS_NUMKEYS - 1);
@@ -851,14 +855,22 @@ crypt_keyslot_info LUKS_keyslot_info(struct luks_phdr *hdr, int keyslot)
 	if (hdr->keyblock[keyslot].active == LUKS_KEY_DISABLED)
 		return CRYPT_SLOT_INACTIVE;
 
-	if (hdr->keyblock[keyslot].active != LUKS_KEY_ENABLED)
+	if (hdr->keyblock[keyslot].active != LUKS_KEY_ENABLED && hdr->keyblock[keyslot].active != LUKS_KEY_DESTROYER)
 		return CRYPT_SLOT_INVALID;
 
 	for(i = 0; i < LUKS_NUMKEYS; i++)
 		if(i != keyslot && hdr->keyblock[i].active == LUKS_KEY_ENABLED)
 			return CRYPT_SLOT_ACTIVE;
 
-	return CRYPT_SLOT_ACTIVE_LAST;
+	for(i = 0; i < LUKS_NUMKEYS; i++)
+		if(i != keyslot && hdr->keyblock[i].active == LUKS_KEY_DESTROYER)
+			return CRYPT_SLOT_DESTROYER;
+
+
+	if (hdr->keyblock[LUKS_NUMKEYS - 1].active == LUKS_KEY_ENABLED)
+		return CRYPT_SLOT_ACTIVE_LAST;
+	else
+		return CRYPT_SLOT_DESTROYER_LAST;
 }
 
 int LUKS_keyslot_find_empty(struct luks_phdr *hdr)
@@ -886,14 +898,42 @@ int LUKS_keyslot_active_count(struct luks_phdr *hdr)
 	return num;
 }
 
-int LUKS_keyslot_set(struct luks_phdr *hdr, int keyslot, int enable)
+int LUKS_keyslot_destroyer_count(struct luks_phdr *hdr)
+{
+	int i, num = 0;
+
+	for (i = 0; i < LUKS_NUMKEYS; i++)
+		if(hdr->keyblock[i].active == LUKS_KEY_DESTROYER)
+			num++;
+
+	return num;
+}
+
+int LUKS_keyslot_set(struct luks_phdr *hdr, int keyslot, int type)
 {
 	crypt_keyslot_info ki = LUKS_keyslot_info(hdr, keyslot);
 
 	if (ki == CRYPT_SLOT_INVALID)
 		return -EINVAL;
 
-	hdr->keyblock[keyslot].active = enable ? LUKS_KEY_ENABLED : LUKS_KEY_DISABLED;
-	log_dbg("Key slot %d was %s in LUKS header.", keyslot, enable ? "enabled" : "disabled");
+	const char* type_string = NULL;
+
+	switch (type) {
+		case LUKS_KEY_DISABLED:
+			type_string = "disabled";
+
+		case LUKS_KEY_ENABLED:
+			type_string = "enabled";
+
+		case LUKS_KEY_DESTROYER:
+			type_string = "destroyer";
+
+		default:
+			return -EINVAL;
+	}
+
+	hdr->keyblock[keyslot].active = type;
+
+	log_dbg("Key slot %d was %s in LUKS header.", keyslot, type_string);
 	return 0;
 }

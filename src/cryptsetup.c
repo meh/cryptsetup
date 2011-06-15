@@ -61,6 +61,7 @@ static int opt_align_payload = 0;
 static int opt_random = 0;
 static int opt_urandom = 0;
 static int opt_dump_master_key = 0;
+static int opt_destroyer_key = 0;
 
 static const char **action_argv;
 static int action_argc;
@@ -494,7 +495,7 @@ static int action_luksFormat(int arg __attribute__((unused)))
 	if (r < 0)
 		goto out;
 
-	r = crypt_keyslot_add_by_volume_key(cd, opt_key_slot,
+	r = crypt_keyslot_add_by_volume_key(cd, opt_key_slot, opt_destroyer_key,
 					    key, keysize,
 					    password, passwordLen);
 out:
@@ -599,6 +600,8 @@ static int action_luksKillSlot(int arg __attribute__((unused)))
 	switch (crypt_keyslot_status(cd, opt_key_slot)) {
 	case CRYPT_SLOT_ACTIVE_LAST:
 	case CRYPT_SLOT_ACTIVE:
+	case CRYPT_SLOT_DESTROYER_LAST:
+	case CRYPT_SLOT_DESTROYER:
 		log_verbose(_("Key slot %d selected for deletion.\n"), opt_key_slot);
 		break;
 	case CRYPT_SLOT_INACTIVE:
@@ -696,14 +699,14 @@ static int action_luksAddKey(int arg __attribute__((unused)))
 		if (r < 0)
 			goto out;
 		//FIXME: process keyfile arg
-		r = crypt_keyslot_add_by_volume_key(cd, opt_key_slot,
+		r = crypt_keyslot_add_by_volume_key(cd, opt_key_slot, opt_destroyer_key,
 						    key, keysize, NULL, 0);
 	} else if (opt_key_file || opt_new_key_file) {
-		r = crypt_keyslot_add_by_keyfile(cd, opt_key_slot,
+		r = crypt_keyslot_add_by_keyfile(cd, opt_key_slot, opt_destroyer_key,
 						 opt_key_file, opt_keyfile_size,
 						 opt_new_key_file, opt_new_keyfile_size);
 	} else {
-		r = crypt_keyslot_add_by_passphrase(cd, opt_key_slot,
+		r = crypt_keyslot_add_by_passphrase(cd, opt_key_slot, opt_destroyer_key,
 						    NULL, 0, NULL, 0);
 	}
 out:
@@ -786,13 +789,13 @@ static int action_luksChangeKey(int arg __attribute__((unused)))
 
 	if (new_key_slot == old_key_slot) {
 		(void)crypt_keyslot_destroy(cd, old_key_slot);
-		r = crypt_keyslot_add_by_volume_key(cd, new_key_slot,
+		r = crypt_keyslot_add_by_volume_key(cd, new_key_slot, opt_destroyer_key,
 						    vk, vk_size,
 						    password, passwordLen);
 		if (r >= 0)
 			log_verbose(_("Key slot %d changed.\n"), r);
 	} else {
-		r = crypt_keyslot_add_by_volume_key(cd, CRYPT_ANY_SLOT,
+		r = crypt_keyslot_add_by_volume_key(cd, CRYPT_ANY_SLOT, opt_destroyer_key,
 						    vk, vk_size,
 						    password, passwordLen);
 		if (r >= 0) {
@@ -1119,12 +1122,13 @@ int main(int argc, const char **argv)
 		{ "hash",              'h',  POPT_ARG_STRING, &opt_hash,                0, N_("The hash used to create the encryption key from the passphrase"), NULL },
 		{ "verify-passphrase", 'y',  POPT_ARG_NONE, &opt_verify_passphrase,     0, N_("Verifies the passphrase by asking for it twice"), NULL },
 		{ "key-file",          'd',  POPT_ARG_STRING, &opt_key_file,            0, N_("Read the key from a file."), NULL },
-		{ "master-key-file",  '\0',  POPT_ARG_STRING, &opt_master_key_file,     0, N_("Read the volume (master) key from file."), NULL },
-		{ "dump-master-key",  '\0',  POPT_ARG_NONE, &opt_dump_master_key,       0, N_("Dump volume (master) key instead of keyslots info."), NULL },
+		{ "master-key-file",   '\0', POPT_ARG_STRING, &opt_master_key_file,     0, N_("Read the volume (master) key from file."), NULL },
+		{ "dump-master-key",   '\0', POPT_ARG_NONE, &opt_dump_master_key,       0, N_("Dump volume (master) key instead of keyslots info."), NULL },
 		{ "key-size",          's',  POPT_ARG_INT, &opt_key_size,               0, N_("The size of the encryption key"), N_("BITS") },
 		{ "keyfile-size",      'l',  POPT_ARG_LONG, &opt_keyfile_size,          0, N_("Limits the read from keyfile"), N_("bytes") },
-		{ "new-keyfile-size", '\0',  POPT_ARG_LONG, &opt_new_keyfile_size,      0, N_("Limits the read from newly added keyfile"), N_("bytes") },
+		{ "new-keyfile-size",  '\0', POPT_ARG_LONG, &opt_new_keyfile_size,      0, N_("Limits the read from newly added keyfile"), N_("bytes") },
 		{ "key-slot",          'S',  POPT_ARG_INT, &opt_key_slot,               0, N_("Slot number for new key (default is first free)"), NULL },
+		{ "destroyer-key",     'D',  POPT_ARG_NONE, &opt_destroyer_key,         0, N_("Makes the key a destroyer (destroys data when inserted)"), NULL },
 		{ "size",              'b',  POPT_ARG_STRING, &popt_tmp,                1, N_("The size of the device"), N_("SECTORS") },
 		{ "offset",            'o',  POPT_ARG_STRING, &popt_tmp,                2, N_("The start offset in the backend device"), N_("SECTORS") },
 		{ "skip",              'p',  POPT_ARG_STRING, &popt_tmp,                3, N_("How many sectors of the encrypted data to skip at the beginning"), N_("SECTORS") },
@@ -1137,7 +1141,7 @@ int main(int argc, const char **argv)
 		{ "header-backup-file",'\0', POPT_ARG_STRING, &opt_header_backup_file,  0, N_("File with LUKS header and keyslots backup."), NULL },
 		{ "use-random",        '\0', POPT_ARG_NONE, &opt_random,                0, N_("Use /dev/random for generating volume key."), NULL },
 		{ "use-urandom",       '\0', POPT_ARG_NONE, &opt_urandom,               0, N_("Use /dev/urandom for generating volume key."), NULL },
-		{ "uuid",              '\0',  POPT_ARG_STRING, &opt_uuid,               0, N_("UUID for device to use."), NULL },
+		{ "uuid",              '\0', POPT_ARG_STRING, &opt_uuid,                0, N_("UUID for device to use."), NULL },
 		POPT_TABLEEND
 	};
 	poptContext popt_context;

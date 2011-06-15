@@ -22,8 +22,9 @@
 #define LUKS_KEY_DISABLED_OLD 0
 #define LUKS_KEY_ENABLED_OLD 0xCAFE
 
-#define LUKS_KEY_DISABLED 0x0000DEAD
-#define LUKS_KEY_ENABLED  0x00AC71F3
+#define LUKS_KEY_DISABLED  0x0000DEAD
+#define LUKS_KEY_ENABLED   0x00AC71F3
+#define LUKS_KEY_DESTROYER 0x00000D1E
 
 #define LUKS_STRIPES 4000
 
@@ -129,6 +130,7 @@ int LUKS_write_phdr(
 int LUKS_set_key(
 	const char *device,
 	unsigned int keyIndex,
+	int destroyer,
 	const char *password,
 	size_t passwordLen,
 	struct luks_phdr *hdr,
@@ -155,7 +157,8 @@ int LUKS_del_key(
 crypt_keyslot_info LUKS_keyslot_info(struct luks_phdr *hdr, int keyslot);
 int LUKS_keyslot_find_empty(struct luks_phdr *hdr);
 int LUKS_keyslot_active_count(struct luks_phdr *hdr);
-int LUKS_keyslot_set(struct luks_phdr *hdr, int keyslot, int enable);
+int LUKS_keyslot_destroyer_count(struct luks_phdr *hdr);
+int LUKS_keyslot_set(struct luks_phdr *hdr, int keyslot, int type);
 
 int LUKS_encrypt_to_storage(
 	char *src, size_t srcLength,
