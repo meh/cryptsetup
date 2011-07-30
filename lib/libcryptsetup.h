@@ -22,14 +22,23 @@ struct crypt_device; /* crypt device handle */
 int crypt_init(struct crypt_device **cd, const char *device);
 
 /**
- * Initialise crypt device handle from provided active device name
+ * Initialise crypt device handle from provided active device name,
+ * and, optionally, from separate metadata (header) device
  * and check if provided device exists.
  *
  * Returns 0 on success or negative errno value otherwise.
  *
  * @cd - crypt device handle
  * @name - name of active crypt device
+ * @header_device - optional device containing on-disk header
+ *  (NULL if it the same as underlying device on there is no on-disk header)
+ *
+ * crypt_init_by_name is quivalent to calling
+ * crypt_init_by_name_and_header(cd, name, NULL);
  */
+int crypt_init_by_name_and_header(struct crypt_device **cd,
+				  const char *name,
+				  const char *header_device);
 int crypt_init_by_name(struct crypt_device **cd, const char *name);
 
 /**
@@ -113,6 +122,13 @@ void crypt_set_iterarion_time(struct crypt_device *cd, uint64_t iteration_time_m
 void crypt_set_password_verify(struct crypt_device *cd, int password_verify);
 
 /**
+ * Set data device (ciphertext device) if LUKS header is separated
+ * @cd - crypt device handle
+ * @device - path to device
+ */
+int crypt_set_data_device(struct crypt_device *cd, const char *device);
+
+/**
  * Set which RNG (random number generator) is used for generating long term key
  * @cd - crypt device handle
  * @rng_type - kernel random number generator to use
@@ -160,18 +176,20 @@ const char *crypt_get_type(struct crypt_device *cd);
 struct crypt_params_plain {
 	const char *hash; /* password hash function */
 	uint64_t offset;  /* offset in sectors */
-	uint64_t skip;    /* IV initilisation sector */
+	uint64_t skip;    /* IV offset / initialisation sector */
+	uint64_t size;    /* size of mapped device or 0 for autodetection */
 };
 
 struct crypt_params_luks1 {
 	const char *hash;      /* hash used in LUKS header */
 	size_t data_alignment; /* in sectors, data offset is multiple of this */
+	const char *data_device; /* detached ciphertext device or NULL */
 };
 
 struct crypt_params_loopaes {
 	const char *hash; /* key hash function */
 	uint64_t offset;  /* offset in sectors */
-	uint64_t skip;    /* IV initilisation sector */
+	uint64_t skip;    /* IV offset / initialisation sector */
 };
 /**
  * Create (format) new crypt device (and possible header on-disk) but not activates it.
@@ -374,7 +392,9 @@ int crypt_keyslot_destroy(struct crypt_device *cd, int keyslot);
  * Activation flags
  */
 #define CRYPT_ACTIVATE_READONLY (1 << 0)
-#define CRYPT_ACTIVATE_NO_UUID  (1 << 1)
+#define CRYPT_ACTIVATE_NO_UUID  (1 << 1) /* ignored */
+#define CRYPT_ACTIVATE_SHARED   (1 << 2)
+#define CRYPT_ACTIVATE_ALLOW_DISCARDS (1 << 3) /* enable discards aka TRIM */
 
 /**
  * Active device runtime attributes
@@ -537,6 +557,7 @@ int crypt_dump(struct crypt_device *cd);
  * uuid - device UUID or NULL if not set
  * device_name - underlying device name or NULL if not yet set
  * data_offset - device offset in sectors where real data starts on underlying device)
+ * iv_offset - IV offset in sectors (skip)
  * volume_key_size - size (in bytes) of volume key for crypt device
  */
 const char *crypt_get_cipher(struct crypt_device *cd);
@@ -544,6 +565,7 @@ const char *crypt_get_cipher_mode(struct crypt_device *cd);
 const char *crypt_get_uuid(struct crypt_device *cd);
 const char *crypt_get_device_name(struct crypt_device *cd);
 uint64_t crypt_get_data_offset(struct crypt_device *cd);
+uint64_t crypt_get_iv_offset(struct crypt_device *cd);
 int crypt_get_volume_key_size(struct crypt_device *cd);
 
 /**
@@ -610,67 +632,6 @@ const char *crypt_get_dir(void);
 #define CRYPT_DEBUG_ALL  -1
 #define CRYPT_DEBUG_NONE  0
 void crypt_set_debug_level(int level);
-
-/**
- * OLD DEPRECATED API **********************************
- *
- * Provided only for backward compatibility.
- */
-
-struct interface_callbacks {
-    int (*yesDialog)(char *msg);
-    void (*log)(int level, char *msg);
-};
-
-#define	CRYPT_FLAG_VERIFY	        (1 << 0)
-#define CRYPT_FLAG_READONLY	        (1 << 1)
-#define	CRYPT_FLAG_VERIFY_IF_POSSIBLE	(1 << 2)
-#define	CRYPT_FLAG_VERIFY_ON_DELKEY	(1 << 3)
-#define	CRYPT_FLAG_NON_EXCLUSIVE_ACCESS	(1 << 4)
-
-struct crypt_options {
-	const char	*name;
-	const char	*device;
-
-	const char	*cipher;
-	const char	*hash;
-
-	const char	*passphrase;
-	int		passphrase_fd;
-	const char	*key_file;
-	const char	*new_key_file;
-	int		key_size;
-
-	unsigned int	flags;
-	int 	        key_slot;
-
-	uint64_t	size;
-	uint64_t	offset;
-	uint64_t	skip;
-	uint64_t        iteration_time;
-	uint64_t	timeout;
-
-	uint64_t	align_payload;
-	int             tries;
-
-	struct interface_callbacks *icb;
-};
-
-int crypt_create_device(struct crypt_options *options);
-int crypt_update_device(struct crypt_options *options);
-int crypt_resize_device(struct crypt_options *options);
-int crypt_query_device(struct crypt_options *options);
-int crypt_remove_device(struct crypt_options *options);
-int crypt_luksFormat(struct crypt_options *options);
-int crypt_luksOpen(struct crypt_options *options);
-int crypt_luksKillSlot(struct crypt_options *options);
-int crypt_luksRemoveKey(struct crypt_options *options);
-int crypt_luksAddKey(struct crypt_options *options);
-int crypt_luksUUID(struct crypt_options *options);
-int crypt_isLuks(struct crypt_options *options);
-int crypt_luksDump(struct crypt_options *options);
-
-void crypt_put_options(struct crypt_options *options);
 
 #ifdef __cplusplus
 }

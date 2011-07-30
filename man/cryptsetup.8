@@ -14,7 +14,8 @@ For basic (plain) dm-crypt mappings, there are four operations.
 creates a mapping with <name> backed by device <device>.
 
 \fB<options>\fR can be [\-\-hash, \-\-cipher, \-\-verify-passphrase,
-\-\-key-file, \-\-key-size, \-\-offset, \-\-skip, \-\-size, \-\-readonly]
+\-\-key-file, \-\-key-size, \-\-offset, \-\-skip, \-\-size, \-\-readonly, \-\-shared,
+\-\-allow-discards]
 .PP
 \fIremove\fR <name>
 .IP
@@ -51,7 +52,8 @@ opens the LUKS partition <device> and sets up a mapping <name> after
 successful verification of the supplied key material
 (either via key file by \-\-key-file, or via prompting).
 
-\fB<options>\fR can be [\-\-key-file, \-\-keyfile-size, \-\-readonly].
+\fB<options>\fR can be [\-\-key-file, \-\-keyfile-size, \-\-readonly, \-\-allow-discards,
+\-\-header].
 .PP
 \fIluksClose\fR <name>
 .IP
@@ -66,13 +68,15 @@ After that operation you have to use \fIluksResume\fR to reinstate
 encryption key (and resume device) or \fIluksClose\fR to remove mapped device.
 
 \fBWARNING:\fR never try to suspend device where is the cryptsetup binary itself.
+
+\fB<options>\fR can be [\-\-header].
 .PP
 \fIluksResume\fR <name>
 .IP
 Resumes suspended device and reinstates encryption key. You will need provide passphrase
 identical to \fIluksOpen\fR command (using prompting or key file).
 
-\fB<options>\fR can be [\-\-key-file, \-\-keyfile-size]
+\fB<options>\fR can be [\-\-key-file, \-\-keyfile-size, \-\-header]
 .PP
 \fIluksAddKey\fR <device> [<new key file>]
 .IP
@@ -186,8 +190,8 @@ and not used it in IV sector calculations, you have to explicitly use
 Use \fB\-\-hash\fR to override hash function for password hashing
 (otherwise it is detected according to key size).
 
-\fB<options>\fR can be [\-\-key-file, \-\-key-size, \-\-offset, \-\-skip, 
-\-\-hash, \-\-readonly].
+\fB<options>\fR can be [\-\-key-file, \-\-key-size, \-\-offset, \-\-skip,
+\-\-hash, \-\-readonly, \-\-allow-discards].
 .PP
 \fIloopaesClose\fR <name>
 .IP
@@ -319,6 +323,12 @@ This option is only relevant for \fIcreate\fR and \fIloopaesOpen\fR action.
 .B "\-\-readonly"
 set up a read-only mapping.
 .TP
+.B "\-\-shared"
+create another non-overlapping mapping to one common ciphertext device,
+e.g. to create hidden device inside another encrypted device.
+This option is only relevant for \fIcreate\fR action.
+Use \-\-offset, \-\-size and \-\-skip to specify mapped area.
+.TP
 .B "\-\-iter-time, \-i"
 The number of milliseconds to spend with PBKDF2 password processing.
 This option is only relevant to the LUKS operations as
@@ -347,6 +357,9 @@ If not specified, cryptsetup tries to use topology info provided by kernel
 for underlying device to get optimal alignment.
 If not available (or calculated value is multiple of default) data is by
 default aligned to 1 MiB boundary (2048 512-byte sectors).
+
+For detached LUKS header it specifies offset on data device.
+See also \-\-header option.
 .TP
 .B "\-\-uuid=\fIUUID\fR"
 Use provided \fIUUID\fR in \fIluksFormat\fR command instead of generating
@@ -354,6 +367,35 @@ new one or change existing UUID in \fIluksUUID\fR command.
 
 The UUID must be provided in standard UUID format
 (e.g. 12345678-1234-1234-1234-123456789abc).
+.TP
+.B "\-\-allow-discards\fR"
+Allow using of discards (TRIM) requests for device.
+This option is only relevant for \fIcreate\fR, \fIluksOpen\fR or \fIloopaesOpen\fR.
+
+\fBWARNING:\fR Assess the specific security risks carefully before enabling this
+option.  For example, allowing discards on encrypted devices may lead to the leak
+of information about the ciphertext device (filesystem type, used space etc.)
+if the discarded blocks can be located easily on the device later.
+
+Kernel version 3.1 or more recent is required.
+For older versions is the option ignored.
+.TP
+.B "\-\-header\fR"
+Set detached (separated) metadata device or file with LUKS header.
+
+This options allows separation of ciphertext device and on-disk metadata header.
+
+This option is only relevant for LUKS devices and can be used in \fIluksFormat\fR,
+\fIluksOpen\fR, \fIluksSuspend\fR, \fIluksResume\fR and \fIresize\fR commands.
+
+If used with \fIluksFormat\fR the \-\-align-payload option is taken
+as absolute sector alignment on ciphertext device and can be zero.
+
+For other commands with separated metadata device you have to always specify
+path to metadata device (not to the ciphertext device).
+
+\fBWARNING:\fR There is no possible check that specified ciphertext device
+is correct if on-disk header is detached. Use with care.
 .TP
 .B "\-\-version"
 Show the version.

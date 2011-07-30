@@ -19,8 +19,6 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/ioctl.h>
-#include <linux/fs.h>
 #include <netinet/in.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -29,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <assert.h>
 #include <uuid/uuid.h>
 
 #include "luks.h"
@@ -312,7 +311,6 @@ int LUKS_read_phdr(const char *device,
 {
 	ssize_t hdr_size = sizeof(struct luks_phdr);
 	int devfd = 0, r = 0;
-	uint64_t size;
 
 	log_dbg("Reading LUKS header of size %d from device %s",
 		hdr_size, device);
@@ -328,15 +326,7 @@ int LUKS_read_phdr(const char *device,
 	else
 		r = _check_and_convert_hdr(device, hdr, require_luks_device, ctx);
 
-#ifdef BLKGETSIZE64
-	if (r == 0 && (ioctl(devfd, BLKGETSIZE64, &size) < 0 ||
-	    size < (uint64_t)hdr->payloadOffset)) {
-		log_err(ctx, _("LUKS header detected but device %s is too small.\n"), device);
-		r = -EINVAL;
-	}
-#endif
 	close(devfd);
-
 	return r;
 }
 
@@ -412,6 +402,7 @@ int LUKS_generate_phdr(struct luks_phdr *header,
 		       unsigned int alignOffset,
 		       uint32_t iteration_time_ms,
 		       uint64_t *PBKDF2_per_sec,
+		       const char *metadata_device,
 		       struct crypt_device *ctx)
 {
 	unsigned int i=0;
@@ -421,7 +412,8 @@ int LUKS_generate_phdr(struct luks_phdr *header,
 	int currentSector;
 	char luksMagic[] = LUKS_MAGIC;
 
-	if (alignPayload == 0)
+	/* For separate metadata device allow zero alignment */
+	if (alignPayload == 0 && !metadata_device)
 		alignPayload = DEFAULT_DISK_ALIGNMENT / SECTOR_SIZE;
 
 	if (PBKDF2_HMAC_ready(hashSpec) < 0) {
@@ -485,10 +477,15 @@ int LUKS_generate_phdr(struct luks_phdr *header,
 		currentSector = round_up_modulo(currentSector + blocksPerStripeSet,
 						LUKS_ALIGN_KEYSLOTS / SECTOR_SIZE);
 	}
-	currentSector = round_up_modulo(currentSector, alignPayload);
 
-	/* alignOffset - offset from natural device alignment provided by topology info */
-	header->payloadOffset = currentSector + alignOffset;
+	if (metadata_device) {
+		/* for separate metadata device use alignPayload directly */
+		header->payloadOffset = alignPayload;
+	} else {
+		/* alignOffset - offset from natural device alignment provided by topology info */
+		currentSector = round_up_modulo(currentSector, alignPayload);
+		header->payloadOffset = currentSector + alignOffset;
+	}
 
         uuid_unparse(partitionUuid, header->uuid);
 
@@ -525,7 +522,7 @@ int LUKS_set_key(const char *device, unsigned int keyIndex,
 		 uint64_t *PBKDF2_per_sec,
 		 struct crypt_device *ctx)
 {
-	char derivedKey[hdr->keyBytes];
+	struct volume_key *derived_key;
 	char *AfKey = NULL;
 	unsigned int AFEKSize;
 	uint64_t PBKDF2_temp;
@@ -560,23 +557,26 @@ int LUKS_set_key(const char *device, unsigned int keyIndex,
 
 	log_dbg("Key slot %d use %d password iterations.", keyIndex, hdr->keyblock[keyIndex].passwordIterations);
 
+	derived_key = crypt_alloc_volume_key(hdr->keyBytes, NULL);
+	if (!derived_key)
+		return -ENOMEM;
+
 	r = crypt_random_get(ctx, hdr->keyblock[keyIndex].passwordSalt,
 		       LUKS_SALTSIZE, CRYPT_RND_NORMAL);
 	if (r < 0)
 		return r;
 
-//	assert((vk->keylength % TWOFISH_BLOCKSIZE) == 0); FIXME
-
 	r = PBKDF2_HMAC(hdr->hashSpec, password,passwordLen,
 			hdr->keyblock[keyIndex].passwordSalt,LUKS_SALTSIZE,
 			hdr->keyblock[keyIndex].passwordIterations,
-			derivedKey, hdr->keyBytes);
+			derived_key->key, hdr->keyBytes);
 	if (r < 0)
 		goto out;
 
 	/*
 	 * AF splitting, the masterkey stored in vk->key is split to AfKey
 	 */
+	assert(vk->keylength == hdr->keyBytes);
 	AFEKSize = hdr->keyblock[keyIndex].stripes*vk->keylength;
 	AfKey = crypt_safe_alloc(AFEKSize);
 	if (!AfKey) {
@@ -596,8 +596,7 @@ int LUKS_set_key(const char *device, unsigned int keyIndex,
 	r = LUKS_encrypt_to_storage(AfKey,
 				    AFEKSize,
 				    hdr,
-				    derivedKey,
-				    hdr->keyBytes,
+				    derived_key,
 				    device,
 				    hdr->keyblock[keyIndex].keyMaterialOffset,
 				    ctx);
@@ -619,7 +618,7 @@ int LUKS_set_key(const char *device, unsigned int keyIndex,
 	r = 0;
 out:
 	crypt_safe_free(AfKey);
-	memset(derivedKey, 0, sizeof(derivedKey));
+	crypt_free_volume_key(derived_key);
 	return r;
 }
 
@@ -651,7 +650,7 @@ static int LUKS_open_key(const char *device,
 		  struct crypt_device *ctx)
 {
 	crypt_keyslot_info ki = LUKS_keyslot_info(hdr, keyIndex);
-	char derivedKey[hdr->keyBytes];
+	struct volume_key *derived_key;
 	char *AfKey;
 	size_t AFEKSize;
 	int r;
@@ -662,8 +661,11 @@ static int LUKS_open_key(const char *device,
 	if (ki < CRYPT_SLOT_ACTIVE)
 		return -ENOENT;
 
-	// assert((vk->keylength % TWOFISH_BLOCKSIZE) == 0); FIXME
+	derived_key = crypt_alloc_volume_key(hdr->keyBytes, NULL);
+	if (!derived_key)
+		return -ENOMEM;
 
+	assert(vk->keylength == hdr->keyBytes);
 	AFEKSize = hdr->keyblock[keyIndex].stripes*vk->keylength;
 	AfKey = crypt_safe_alloc(AFEKSize);
 	if (!AfKey)
@@ -672,7 +674,7 @@ static int LUKS_open_key(const char *device,
 	r = PBKDF2_HMAC(hdr->hashSpec, password,passwordLen,
 			hdr->keyblock[keyIndex].passwordSalt,LUKS_SALTSIZE,
 			hdr->keyblock[keyIndex].passwordIterations,
-			derivedKey, hdr->keyBytes);
+			derived_key->key, hdr->keyBytes);
 	if (r < 0)
 		goto out;
 
@@ -680,8 +682,7 @@ static int LUKS_open_key(const char *device,
 	r = LUKS_decrypt_from_storage(AfKey,
 				      AFEKSize,
 				      hdr,
-				      derivedKey,
-				      hdr->keyBytes,
+				      derived_key,
 				      device,
 				      hdr->keyblock[keyIndex].keyMaterialOffset,
 				      ctx);
@@ -699,7 +700,7 @@ static int LUKS_open_key(const char *device,
 		log_verbose(ctx, _("Key slot %d unlocked.\n"), keyIndex);
 out:
 	crypt_safe_free(AfKey);
-	memset(derivedKey, 0, sizeof(derivedKey));
+	crypt_free_volume_key(derived_key);
 	return r;
 }
 
@@ -896,4 +897,38 @@ int LUKS_keyslot_set(struct luks_phdr *hdr, int keyslot, int enable)
 	hdr->keyblock[keyslot].active = enable ? LUKS_KEY_ENABLED : LUKS_KEY_DISABLED;
 	log_dbg("Key slot %d was %s in LUKS header.", keyslot, enable ? "enabled" : "disabled");
 	return 0;
+}
+
+int LUKS1_activate(struct crypt_device *cd,
+		   const char *name,
+		   struct volume_key *vk,
+		   uint32_t flags)
+{
+	int r;
+	char *dm_cipher = NULL;
+	struct crypt_dm_active_device dmd = {
+		.device = crypt_get_device_name(cd),
+		.cipher = NULL,
+		.uuid   = crypt_get_uuid(cd),
+		.vk    = vk,
+		.offset = crypt_get_data_offset(cd),
+		.iv_offset = 0,
+		.size   = 0,
+		.flags  = flags
+	};
+
+	r = device_check_and_adjust(cd, dmd.device, DEV_EXCL,
+				    &dmd.size, &dmd.offset, &flags);
+	if (r)
+		return r;
+
+	r = asprintf(&dm_cipher, "%s-%s", crypt_get_cipher(cd), crypt_get_cipher_mode(cd));
+	if (r < 0)
+		return -ENOMEM;
+
+	dmd.cipher = dm_cipher;
+	r = dm_create_device(name, CRYPT_LUKS1, &dmd, 0);
+
+	free(dm_cipher);
+	return r;
 }

@@ -88,6 +88,7 @@ int LUKS_generate_phdr(
 	unsigned int alignOffset,
 	uint32_t iteration_time_ms,
 	uint64_t *PBKDF2_per_sec,
+	const char *metadata_device,
 	struct crypt_device *ctx);
 
 int LUKS_read_phdr(
@@ -160,7 +161,7 @@ int LUKS_keyslot_set(struct luks_phdr *hdr, int keyslot, int enable);
 int LUKS_encrypt_to_storage(
 	char *src, size_t srcLength,
 	struct luks_phdr *hdr,
-	char *key, size_t keyLength,
+	struct volume_key *vk,
 	const char *device,
 	unsigned int sector,
 	struct crypt_device *ctx);
@@ -168,9 +169,14 @@ int LUKS_encrypt_to_storage(
 int LUKS_decrypt_from_storage(
 	char *dst, size_t dstLength,
 	struct luks_phdr *hdr,
-	char *key, size_t keyLength,
+	struct volume_key *vk,
 	const char *device,
 	unsigned int sector,
 	struct crypt_device *ctx);
+
+int LUKS1_activate(struct crypt_device *cd,
+		   const char *name,
+		   struct volume_key *vk,
+		   uint32_t flags);
 
 #endif

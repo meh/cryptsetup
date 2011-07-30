@@ -1,3 +1,25 @@
+2011-07-25  Milan Broz  <mbroz@redhat.com>
+	* Remove hash/hmac restart from crypto backend and make it part of hash/hmac final.
+
+2011-07-19  Milan Broz  <mbroz@redhat.com>
+	* Revert default initialisation of volume key in crypt_init_by_name().
+	* Do not allow key retrieval while suspended (key could be wiped).
+	* Do not allow suspend for non-LUKS devices.
+	* Support retries and timeout parameters for luksSuspend.
+	* Add --header option for detached metadata (on-disk LUKS header) device.
+	* Add crypt_init_by_name_and_header() and crypt_set_data_device() to API.
+	* Allow different data offset setting for detached header.
+
+2011-07-07  Milan Broz  <mbroz@redhat.com>
+	* Remove old API functions (all functions using crypt_options).
+	* Add --enable-discards option to allow discards/TRIM requests.
+	* Add crypt_get_iv_offset() function to API.
+
+2011-07-01  Milan Broz  <mbroz@redhat.com>
+	* Add --shared option for creating non-overlapping crypt segments.
+	* Add shared flag to libcryptsetup api.
+	* Fix plain crypt format parameters to include size option (API change).
+
 2011-06-08  Milan Broz  <mbroz@redhat.com>
 	* Fix return code for status command when device doesn't exists.
 

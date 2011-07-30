@@ -43,6 +43,7 @@ static const char *opt_key_file = NULL;
 static const char *opt_master_key_file = NULL;
 static const char *opt_header_backup_file = NULL;
 static const char *opt_uuid = NULL;
+static const char *opt_header_device = NULL;
 static int opt_key_size = 0;
 static long opt_keyfile_size = 0;
 static long opt_new_keyfile_size = 0;
@@ -61,6 +62,8 @@ static int opt_align_payload = 0;
 static int opt_random = 0;
 static int opt_urandom = 0;
 static int opt_dump_master_key = 0;
+static int opt_shared = 0;
+static int opt_allow_discards = 0;
 
 static const char **action_argv;
 static int action_argc;
@@ -224,10 +227,12 @@ static int action_create(int arg __attribute__((unused)))
 		.hash = opt_hash ?: DEFAULT_PLAIN_HASH,
 		.skip = opt_skip,
 		.offset = opt_offset,
+		.size = opt_size,
 	};
 	char *password = NULL;
 	size_t passwordLen;
 	size_t key_size = (opt_key_size ?: DEFAULT_PLAIN_KEYBITS) / 8;
+	uint32_t activate_flags = 0;
 	int r;
 
 	if (params.hash && !strcmp(params.hash, "plain"))
@@ -262,11 +267,20 @@ static int action_create(int arg __attribute__((unused)))
 	if (r < 0)
 		goto out;
 
+	if (opt_readonly)
+		activate_flags |= CRYPT_ACTIVATE_READONLY;
+
+	if (opt_shared)
+		activate_flags |= CRYPT_ACTIVATE_SHARED;
+
+	if (opt_allow_discards)
+		activate_flags |= CRYPT_ACTIVATE_ALLOW_DISCARDS;
+
 	if (opt_key_file)
 		/* With hashing, read the whole keyfile */
 		r = crypt_activate_by_keyfile(cd, action_argv[0],
 			CRYPT_ANY_SLOT, opt_key_file, params.hash ? 0 : key_size,
-			opt_readonly ?  CRYPT_ACTIVATE_READONLY : 0);
+			activate_flags);
 	else {
 		r = crypt_get_key(_("Enter passphrase: "),
 				  &password, &passwordLen, opt_keyfile_size,
@@ -277,17 +291,8 @@ static int action_create(int arg __attribute__((unused)))
 			goto out;
 
 		r = crypt_activate_by_passphrase(cd, action_argv[0],
-			CRYPT_ANY_SLOT, password, passwordLen,
-			opt_readonly ?  CRYPT_ACTIVATE_READONLY : 0);
+			CRYPT_ANY_SLOT, password, passwordLen, activate_flags);
 	}
-
-	/* FIXME: workaround, new api missing format parameter for size.
-	 * Properly fix it after bumping library version,
-	 * add start_offset and size into "PLAIN" format specifiers.
-	 */
-	if (r >= 0 && opt_size)
-		r = crypt_resize(cd, action_argv[0], opt_size);
-
 out:
 	crypt_free(cd);
 	crypt_safe_free(password);
@@ -304,12 +309,19 @@ static int action_loopaesOpen(int arg __attribute__((unused)))
 		.skip = opt_skip_valid ? opt_skip : opt_offset,
 	};
 	unsigned int key_size = (opt_key_size ?: DEFAULT_LOOPAES_KEYBITS) / 8;
+	uint32_t activate_flags = 0;
 	int r;
 
 	if (!opt_key_file) {
 		log_err(_("Option --key-file is required.\n"));
 		return -EINVAL;
 	}
+
+	if (opt_readonly)
+		activate_flags |= CRYPT_ACTIVATE_READONLY;
+
+	if (opt_allow_discards)
+		activate_flags |= CRYPT_ACTIVATE_ALLOW_DISCARDS;
 
 	if ((r = crypt_init(&cd, action_argv[0])))
 		goto out;
@@ -319,9 +331,8 @@ static int action_loopaesOpen(int arg __attribute__((unused)))
 	if (r < 0)
 		goto out;
 
-	r = crypt_activate_by_keyfile(cd, action_argv[1],
-		CRYPT_ANY_SLOT, opt_key_file, opt_keyfile_size,
-		opt_readonly ?  CRYPT_ACTIVATE_READONLY : 0);
+	r = crypt_activate_by_keyfile(cd, action_argv[1], CRYPT_ANY_SLOT,
+				      opt_key_file, opt_keyfile_size, activate_flags);
 out:
 	crypt_free(cd);
 
@@ -346,7 +357,7 @@ static int action_resize(int arg __attribute__((unused)))
 	struct crypt_device *cd = NULL;
 	int r;
 
-	r = crypt_init_by_name(&cd, action_argv[0]);
+	r = crypt_init_by_name_and_header(&cd, action_argv[0], opt_header_device);
 	if (r == 0)
 		r = crypt_resize(cd, action_argv[0], opt_size);
 
@@ -401,6 +412,8 @@ static int action_status(int arg __attribute__((unused)))
 			log_std("  skipped: %" PRIu64 " sectors\n", cad.iv_offset);
 		log_std("  mode:    %s\n", cad.flags & CRYPT_ACTIVATE_READONLY ?
 					   "readonly" : "read/write");
+		if (cad.flags & CRYPT_ACTIVATE_ALLOW_DISCARDS)
+			log_std("  flags:   discards\n");
 	}
 out:
 	crypt_free(cd);
@@ -436,6 +449,7 @@ fail:
 static int action_luksFormat(int arg __attribute__((unused)))
 {
 	int r = -EINVAL, keysize;
+	const char *header_device;
 	char *msg = NULL, *key = NULL, cipher [MAX_CIPHER_LEN], cipher_mode[MAX_CIPHER_LEN];
 	char *password = NULL;
 	size_t passwordLen;
@@ -443,9 +457,13 @@ static int action_luksFormat(int arg __attribute__((unused)))
 	struct crypt_params_luks1 params = {
 		.hash = opt_hash ?: DEFAULT_LUKS1_HASH,
 		.data_alignment = opt_align_payload,
+		.data_device = opt_header_device ? action_argv[0] : NULL,
 	};
 
-	if(asprintf(&msg, _("This will overwrite data on %s irrevocably."), action_argv[0]) == -1) {
+	header_device = opt_header_device ?: action_argv[0];
+
+	if(asprintf(&msg, _("This will overwrite data on %s irrevocably."),
+		    header_device) == -1) {
 		log_err(_("memory allocation error in action_luksFormat"));
 		r = -ENOMEM;
 		goto out;
@@ -462,7 +480,7 @@ static int action_luksFormat(int arg __attribute__((unused)))
 		goto out;
 	}
 
-	if ((r = crypt_init(&cd, action_argv[0])))
+	if ((r = crypt_init(&cd, header_device)))
 		goto out;
 
 	keysize = (opt_key_size ?: DEFAULT_LUKS1_KEYBITS) / 8;
@@ -508,22 +526,45 @@ out:
 static int action_luksOpen(int arg __attribute__((unused)))
 {
 	struct crypt_device *cd = NULL;
+	const char *data_device, *header_device;
 	uint32_t flags = 0;
 	int r;
 
-	if ((r = crypt_init(&cd, action_argv[0])))
+	if (opt_header_device) {
+		header_device = opt_header_device;
+		data_device = action_argv[0];
+	} else {
+		header_device = action_argv[0];
+		data_device = NULL;
+	}
+
+	if ((r = crypt_init(&cd, header_device)))
 		goto out;
 
 	if ((r = crypt_load(cd, CRYPT_LUKS1, NULL)))
 		goto out;
+
+	if (data_device &&
+	    (r = crypt_set_data_device(cd, data_device)))
+		goto out;
+
+	if (!data_device && (crypt_get_data_offset(cd) < 8)) {
+		log_err(_("Reduced data offset is allowed only for detached LUKS header.\n"));
+		r = -EINVAL;
+		goto out;
+	}
 
 	crypt_set_timeout(cd, opt_timeout);
 	crypt_set_password_retry(cd, opt_tries);
 
 	if (opt_iteration_time)
 		crypt_set_iterarion_time(cd, opt_iteration_time);
+
 	if (opt_readonly)
 		flags |= CRYPT_ACTIVATE_READONLY;
+
+	if (opt_allow_discards)
+		flags |= CRYPT_ACTIVATE_ALLOW_DISCARDS;
 
 	if (opt_key_file) {
 		crypt_set_password_retry(cd, 1);
@@ -926,7 +967,7 @@ static int action_luksSuspend(int arg __attribute__((unused)))
 	struct crypt_device *cd = NULL;
 	int r;
 
-	r = crypt_init_by_name(&cd, action_argv[0]);
+	r = crypt_init_by_name_and_header(&cd, action_argv[0], opt_header_device);
 	if (!r)
 		r = crypt_suspend(cd, action_argv[0]);
 
@@ -939,11 +980,11 @@ static int action_luksResume(int arg __attribute__((unused)))
 	struct crypt_device *cd = NULL;
 	int r;
 
-	if ((r = crypt_init_by_name(&cd, action_argv[0])))
+	if ((r = crypt_init_by_name_and_header(&cd, action_argv[0], opt_header_device)))
 		goto out;
 
-	if ((r = crypt_load(cd, CRYPT_LUKS1, NULL)))
-		goto out;
+	crypt_set_timeout(cd, opt_timeout);
+	crypt_set_password_retry(cd, opt_tries);
 
 	if (opt_key_file)
 		r = crypt_resume_by_keyfile(cd, action_argv[0], CRYPT_ANY_SLOT,
@@ -1137,7 +1178,10 @@ int main(int argc, const char **argv)
 		{ "header-backup-file",'\0', POPT_ARG_STRING, &opt_header_backup_file,  0, N_("File with LUKS header and keyslots backup."), NULL },
 		{ "use-random",        '\0', POPT_ARG_NONE, &opt_random,                0, N_("Use /dev/random for generating volume key."), NULL },
 		{ "use-urandom",       '\0', POPT_ARG_NONE, &opt_urandom,               0, N_("Use /dev/urandom for generating volume key."), NULL },
-		{ "uuid",              '\0',  POPT_ARG_STRING, &opt_uuid,               0, N_("UUID for device to use."), NULL },
+		{ "shared",            '\0', POPT_ARG_NONE, &opt_shared,                0, N_("Share device with another non-overlapping crypt segment."), NULL },
+		{ "uuid",              '\0', POPT_ARG_STRING, &opt_uuid,                0, N_("UUID for device to use."), NULL },
+		{ "allow-discards",    '\0', POPT_ARG_NONE, &opt_allow_discards,        0, N_("Allow discards (aka TRIM) requests for device."), NULL },
+		{ "header",            '\0', POPT_ARG_STRING, &opt_header_device,       0, N_("Device or file with separated LUKS header."), NULL },
 		POPT_TABLEEND
 	};
 	poptContext popt_context;
@@ -1217,6 +1261,21 @@ int main(int argc, const char **argv)
 	}
 
 	/* FIXME: rewrite this from scratch */
+
+	if (opt_shared && strcmp(aname, "create")) {
+		usage(popt_context, EXIT_FAILURE,
+		      _("Option --shared is allowed only for create operation.\n"),
+		      poptGetInvocationName(popt_context));
+	}
+
+	if (opt_allow_discards &&
+	    strcmp(aname, "luksOpen") &&
+	    strcmp(aname, "create") &&
+	    strcmp(aname, "loopaesOpen")) {
+		usage(popt_context, EXIT_FAILURE,
+		      _("Option --allow-discards is allowed only for luksOpen, loopaesOpen and create operation.\n"),
+		      poptGetInvocationName(popt_context));
+	}
 
 	if (opt_key_size &&
 	   strcmp(aname, "luksFormat") &&
